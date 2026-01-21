@@ -1,0 +1,53 @@
+from aiogram import Dispatcher
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
+
+from core.context import AppContext
+from .auth import AuthMiddleware
+from .fsm_lock import FSMLockMiddleware
+from .timeout import TimeoutMiddleware
+from .throttling import ThrottlingMiddleware
+from .logging import LoggingMiddleware
+from .data_collector import DataCollectorMiddleware
+from .error import ErrorMiddleware
+from .cache_middleware import CacheMiddleware
+
+
+def setup_middlewares(dp: Dispatcher, context: AppContext) -> None:
+    """Настраивает цепочку middleware для диспетчера."""
+    
+    # Определяем порядок выполнения middleware
+    # (чем раньше в списке, тем раньше выполняется)
+    middlewares = [
+        # 1. Обработка ошибок (должен быть первым, чтобы ловить все ошибки)
+        ErrorMiddleware(),
+        
+        # 2. Логирование
+        LoggingMiddleware(),
+        
+        # 3. Сбор статистики
+        DataCollectorMiddleware(context),
+        
+        # 4. Кэширование
+        CacheMiddleware(context),
+        
+        # 5. Троттлинг (защита от флуда)
+        ThrottlingMiddleware(context),
+        
+        # 6. Проверка таймаута диалога
+        TimeoutMiddleware(context),
+        
+        # 7. Блокировка команд при активном FSM
+        FSMLockMiddleware(),
+        
+        # 8. Проверка авторизации (должен быть последним перед хендлерами)
+        AuthMiddleware(context),
+    ]
+    
+    # Устанавливаем middleware в диспетчер
+    for middleware in middlewares:
+        dp.update.outer_middleware(middleware)
+    
+    # Логируем настройку middleware
+    from structlog import get_logger
+    logger = get_logger(__name__)
+    logger.info("Middlewares configured", count=len(middlewares))
