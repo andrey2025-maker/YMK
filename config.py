@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field, PostgresDsn, RedisDsn
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 
 class DatabaseSettings(BaseSettings):
@@ -37,6 +37,47 @@ class RedisSettings(BaseSettings):
         if self.password:
             return f"redis://:{self.password}@{self.host}:{self.port}/{self.db}"
         return f"redis://{self.host}:{self.port}/{self.db}"
+
+
+class ThrottlingSettings(BaseSettings):
+    """Настройки защиты от флуда и ограничения запросов."""
+    
+    enabled: bool = Field(default=True, description="Включить throttling")
+    
+    # Лимиты для обычных пользователей
+    user_messages_per_minute: int = Field(default=30, description="Сообщений в минуту для пользователя")
+    user_burst_limit: int = Field(default=10, description="Максимум сообщений подряд для пользователя")
+    user_penalty_time: int = Field(default=30, description="Блокировка при превышении (секунды)")
+    
+    # Лимиты для групп
+    group_messages_per_minute: int = Field(default=100, description="Сообщений в минуту для группы")
+    group_burst_limit: int = Field(default=30, description="Максимум сообщений подряд для группы")
+    group_penalty_time: int = Field(default=60, description="Блокировка при превышении (секунды)")
+    
+    # Лимиты для админов
+    admin_messages_per_minute: int = Field(default=200, description="Сообщений в минуту для админа")
+    admin_burst_limit: int = Field(default=50, description="Максимум сообщений подряд для админа")
+    admin_penalty_time: int = Field(default=10, description="Блокировка при превышении (секунды)")
+    
+    # Лимиты для главного админа
+    main_admin_messages_per_minute: int = Field(default=500, description="Сообщений в минуту для главного админа")
+    main_admin_burst_limit: int = Field(default=100, description="Максимум сообщений подряд для главного админа")
+    main_admin_penalty_time: int = Field(default=5, description="Блокировка при превышении (секунды)")
+    
+    # Общие настройки
+    window_size: int = Field(default=60, description="Размер окна для подсчета (секунды)")
+    counter_ttl: int = Field(default=120, description="TTL счетчиков в Redis (секунды)")
+    blocked_ttl: int = Field(default=3600, description="Максимальное время блокировки (секунды)")
+    
+    # Исключения (команды, которые не ограничиваются)
+    exempt_commands: List[str] = Field(
+        default=["start", "help", "команды", "стоп", "отмена"],
+        description="Команды, исключенные из throttling"
+    )
+    
+    # Исключения (ID пользователей или групп)
+    exempt_user_ids: List[int] = Field(default=[], description="ID пользователей с отключенным throttling")
+    exempt_chat_ids: List[int] = Field(default=[], description="ID чатов с отключенным throttling")
 
 
 class TelegramArchiveSettings(BaseSettings):
@@ -108,6 +149,7 @@ class Config(BaseSettings):
     database: DatabaseSettings = DatabaseSettings()
     redis: RedisSettings = RedisSettings()
     archive: TelegramArchiveSettings = TelegramArchiveSettings()
+    throttling: ThrottlingSettings = ThrottlingSettings()  # Добавлено
     
     class Config:
         env_file = ".env"

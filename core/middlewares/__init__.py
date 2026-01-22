@@ -21,8 +21,8 @@ def setup_middlewares(dp: Dispatcher, context: AppContext) -> None:
         # 1. Обработка ошибок (должен быть первым, чтобы ловить все ошибки)
         ErrorMiddleware(),
         
-        # 2. Логирование
-        LoggingMiddleware(),
+        # 2. Логирование - ИСПРАВЛЕНО: добавляем context
+        LoggingMiddleware(context),  # ← ДОБАВИЛИ context
         
         # 3. Сбор статистики
         DataCollectorMiddleware(context),
@@ -33,14 +33,14 @@ def setup_middlewares(dp: Dispatcher, context: AppContext) -> None:
         # 5. Троттлинг (защита от флуда)
         ThrottlingMiddleware(context),
         
-        # 6. Проверка таймаута диалога
-        TimeoutMiddleware(context),
+        # 6. Проверка авторизации (сначала проверяем права)
+        AuthMiddleware(context),
         
-        # 7. Блокировка команд при активном FSM
+        # 7. Блокировка команд при активном FSM (после проверки прав, но перед таймаутом)
         FSMLockMiddleware(),
         
-        # 8. Проверка авторизации (должен быть последним перед хендлерами)
-        AuthMiddleware(context),
+        # 8. Проверка таймаута диалога (последний перед хендлерами)
+        TimeoutMiddleware(context),
     ]
     
     # Устанавливаем middleware в диспетчер
@@ -51,3 +51,26 @@ def setup_middlewares(dp: Dispatcher, context: AppContext) -> None:
     from structlog import get_logger
     logger = get_logger(__name__)
     logger.info("Middlewares configured", count=len(middlewares))
+
+
+# Удалите эти строки (они не нужны, так как уже импортированы выше):
+# from .logging import LoggingMiddleware, setup_logging_middleware
+# 
+# __all__ = [
+#     # ... здесь уже есть другие middleware
+#     'LoggingMiddleware',
+#     'setup_logging_middleware',
+# ]
+
+# Вместо этого добавьте __all__ для всех middleware:
+__all__ = [
+    'AuthMiddleware',
+    'FSMLockMiddleware',
+    'TimeoutMiddleware',
+    'ThrottlingMiddleware',
+    'LoggingMiddleware',
+    'DataCollectorMiddleware',
+    'ErrorMiddleware',
+    'CacheMiddleware',
+    'setup_middlewares',
+]

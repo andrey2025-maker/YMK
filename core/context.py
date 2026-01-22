@@ -155,3 +155,11 @@ class AppContext:
     
     def __str__(self) -> str:
         return f"AppContext(initialized={self._initialized})"
+    
+    async def get_log_channel_id(self) -> Optional[str]:
+        """
+        Получает ID канала для логов из базы данных
+        Реализуйте в соответствии с вашей БД
+        """
+        # Временная заглушка - вернет None
+        return None

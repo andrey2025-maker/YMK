@@ -5,7 +5,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.fsm.storage.base import BaseStorage
 
 from core.context import AppContext
-from core.middlewares import setup_middlewares
+from core.middlewares import setup_middlewares  # ← Здесь используется setup_middlewares
 
 
 def create_bot(context: AppContext) -> Tuple[Bot, Dispatcher]:
@@ -21,7 +21,7 @@ def create_bot(context: AppContext) -> Tuple[Bot, Dispatcher]:
     # Создаем хранилище состояний FSM в Redis
     storage: BaseStorage = RedisStorage(
         redis=context.redis,
-        state_ttl=context.config.bot.dialog_timeout,
+        state_ttl=context.config.bot.dialog_timeout,  # ← Таймаут 120 минут из конфига
         data_ttl=context.config.bot.dialog_timeout,
     )
     
@@ -37,10 +37,8 @@ def create_bot(context: AppContext) -> Tuple[Bot, Dispatcher]:
     # Настраиваем middleware
     setup_middlewares(dp, context)
     
+    # ДОБАВЛЯЕМ ЭТУ СТРОЧКУ ДЛЯ ЛОГИРОВАНИЯ:
+    from core.middlewares.logging import setup_logging_middleware
+    setup_logging_middleware(dp, context)
+    
     return bot, dp
-
-
-def register_handlers(dp: Dispatcher) -> None:
-    """Регистрирует все обработчики."""
-    # Эта функция будет заполнена после создания handlers
-    pass
