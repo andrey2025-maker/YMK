@@ -1,17 +1,20 @@
 """
-Сервис для работы с базой данных PostgreSQL.
-Реализует абстракцию над операциями с БД, обеспечивает валидацию,
-обработку транзакций и управление подключениями.
+Сервис для работы с базой данных.
+Реализует CRUD операции, управление транзакциями и миграциями.
 """
-from typing import Any, Dict, List, Optional, Type, TypeVar
-from sqlalchemy import text, select, update, delete, and_, or_, func
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError
-import logging
 
-from storage.database import async_session
+import logging
+from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Optional, Type, TypeVar, Generic, AsyncGenerator
+from datetime import datetime
+
+from sqlalchemy import select, update, delete, insert, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from sqlalchemy.exc import SQLAlchemyError
+
+from storage.database import async_session_maker
 from storage.models.base import BaseModel
-from utils.exceptions import DatabaseError, ValidationError
 
 T = TypeVar('T', bound=BaseModel)
 
@@ -19,349 +22,334 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseService:
-    """Сервис для работы с базой данных"""
-    
+    """Сервис для работы с базой данных."""
+
     def __init__(self):
-        self.session_factory = async_session
-    
-    async def get_session(self) -> AsyncSession:
-        """Получить асинхронную сессию БД"""
-        return self.session_factory()
-    
-    async def create(self, session: AsyncSession, model_class: Type[T], **kwargs) -> T:
+        self.session_maker = async_session_maker
+
+    @asynccontextmanager
+    async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
         """
-        Создать новую запись в БД
+        Контекстный менеджер для получения сессии БД.
+        
+        Пример использования:
+        async with db_service.get_session() as session:
+            result = await session.execute(query)
+        """
+        async with self.session_maker() as session:
+            try:
+                yield session
+                await session.commit()
+            except SQLAlchemyError as e:
+                await session.rollback()
+                logger.error(f"Database error: {e}")
+                raise
+            finally:
+                await session.close()
+
+    async def create(self, session: AsyncSession, model: BaseModel) -> BaseModel:
+        """
+        Создание новой записи в БД.
         
         Args:
             session: Асинхронная сессия БД
-            model_class: Класс модели SQLAlchemy
-            **kwargs: Атрибуты для создания записи
+            model: Экземпляр модели для сохранения
             
         Returns:
-            Созданный объект модели
-            
-        Raises:
-            DatabaseError: При ошибке работы с БД
-            ValidationError: При нарушении ограничений БД
+            Сохраненная модель с ID
         """
         try:
-            # Проверка обязательных полей
-            self._validate_required_fields(model_class, kwargs)
-            
-            # Создание объекта
-            obj = model_class(**kwargs)
-            session.add(obj)
+            session.add(model)
             await session.flush()
-            
-            logger.debug(f"Создана запись {model_class.__name__} с ID: {obj.id}")
-            return obj
-            
-        except IntegrityError as e:
-            await session.rollback()
-            logger.error(f"Ошибка целостности данных при создании {model_class.__name__}: {e}")
-            raise ValidationError(f"Нарушение целостности данных: {str(e)}")
+            await session.refresh(model)
+            return model
         except SQLAlchemyError as e:
-            await session.rollback()
-            logger.error(f"Ошибка БД при создании {model_class.__name__}: {e}")
-            raise DatabaseError(f"Ошибка базы данных: {str(e)}")
-    
-    async def get_by_id(self, session: AsyncSession, model_class: Type[T], obj_id: str) -> Optional[T]:
+            logger.error(f"Error creating {model.__class__.__name__}: {e}")
+            raise
+
+    async def get_by_id(
+        self, 
+        session: AsyncSession, 
+        model_class: Type[T], 
+        id: str,
+        load_relationships: bool = False
+    ) -> Optional[T]:
         """
-        Получить запись по ID
+        Получение записи по ID.
         
         Args:
             session: Асинхронная сессия БД
-            model_class: Класс модели SQLAlchemy
-            obj_id: UUID записи
+            model_class: Класс модели
+            id: UUID записи
+            load_relationships: Загружать связанные объекты
             
         Returns:
-            Объект модели или None если не найден
+            Найденная запись или None
         """
         try:
-            query = select(model_class).where(model_class.id == obj_id)
+            query = select(model_class).where(model_class.id == id)
+            
+            if load_relationships:
+                # Автоматическая загрузка всех отношений
+                relationships = list(model_class.__mapper__.relationships.keys())
+                for rel in relationships:
+                    query = query.options(selectinload(getattr(model_class, rel)))
+            
             result = await session.execute(query)
             return result.scalar_one_or_none()
-            
         except SQLAlchemyError as e:
-            logger.error(f"Ошибка БД при получении {model_class.__name__} по ID {obj_id}: {e}")
-            raise DatabaseError(f"Ошибка базы данных: {str(e)}")
-    
+            logger.error(f"Error getting {model_class.__name__} by id {id}: {e}")
+            raise
+
     async def get_all(
         self, 
         session: AsyncSession, 
-        model_class: Type[T], 
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
+        model_class: Type[T],
+        skip: int = 0,
+        limit: int = 100,
+        filters: Optional[Dict[str, Any]] = None,
         order_by: Optional[str] = None
     ) -> List[T]:
         """
-        Получить все записи с пагинацией
+        Получение всех записей с пагинацией и фильтрацией.
         
         Args:
             session: Асинхронная сессия БД
-            model_class: Класс модели SQLAlchemy
+            model_class: Класс модели
+            skip: Количество записей для пропуска
             limit: Максимальное количество записей
-            offset: Смещение для пагинации
+            filters: Словарь фильтров {поле: значение}
             order_by: Поле для сортировки
             
         Returns:
-            Список объектов
+            Список записей
         """
         try:
             query = select(model_class)
             
-            # Применение сортировки
-            if order_by:
-                order_column = getattr(model_class, order_by, None)
-                if order_column:
-                    query = query.order_by(order_column)
+            # Применение фильтров
+            if filters:
+                for field, value in filters.items():
+                    if hasattr(model_class, field):
+                        query = query.where(getattr(model_class, field) == value)
             
-            # Применение пагинации
-            if limit:
-                query = query.limit(limit)
-            if offset:
-                query = query.offset(offset)
+            # Сортировка
+            if order_by and hasattr(model_class, order_by):
+                query = query.order_by(getattr(model_class, order_by))
+            else:
+                query = query.order_by(model_class.created_at.desc())
+            
+            # Пагинация
+            query = query.offset(skip).limit(limit)
             
             result = await session.execute(query)
             return list(result.scalars().all())
-            
         except SQLAlchemyError as e:
-            logger.error(f"Ошибка БД при получении всех записей {model_class.__name__}: {e}")
-            raise DatabaseError(f"Ошибка базы данных: {str(e)}")
-    
+            logger.error(f"Error getting all {model_class.__name__}: {e}")
+            raise
+
     async def update(
         self, 
         session: AsyncSession, 
-        model_class: Type[T], 
-        obj_id: str, 
-        **kwargs
-    ) -> Optional[T]:
+        model: BaseModel, 
+        update_data: Dict[str, Any]
+    ) -> BaseModel:
         """
-        Обновить запись
+        Обновление записи в БД.
         
         Args:
             session: Асинхронная сессия БД
-            model_class: Класс модели SQLAlchemy
-            obj_id: UUID записи
-            **kwargs: Атрибуты для обновления
+            model: Экземпляр модели для обновления
+            update_data: Словарь с данными для обновления {поле: значение}
             
         Returns:
-            Обновленный объект или None если не найден
+            Обновленная модель
         """
         try:
-            # Проверка существования записи
-            obj = await self.get_by_id(session, model_class, obj_id)
-            if not obj:
-                return None
+            # Обновление полей
+            for field, value in update_data.items():
+                if hasattr(model, field):
+                    setattr(model, field, value)
             
-            # Обновление атрибутов
-            for key, value in kwargs.items():
-                if hasattr(obj, key):
-                    setattr(obj, key, value)
+            # Обновление временной метки
+            model.updated_at = datetime.utcnow()
             
             await session.flush()
-            
-            # Обновление updated_at
-            if hasattr(obj, 'updated_at'):
-                update_query = update(model_class).where(
-                    model_class.id == obj_id
-                ).values(updated_at=func.now())
-                await session.execute(update_query)
-            
-            logger.debug(f"Обновлена запись {model_class.__name__} с ID: {obj_id}")
-            return obj
-            
-        except IntegrityError as e:
-            await session.rollback()
-            logger.error(f"Ошибка целостности данных при обновлении {model_class.__name__}: {e}")
-            raise ValidationError(f"Нарушение целостности данных: {str(e)}")
+            return model
         except SQLAlchemyError as e:
-            await session.rollback()
-            logger.error(f"Ошибка БД при обновлении {model_class.__name__}: {e}")
-            raise DatabaseError(f"Ошибка базы данных: {str(e)}")
-    
-    async def delete(self, session: AsyncSession, model_class: Type[T], obj_id: str) -> bool:
+            logger.error(f"Error updating {model.__class__.__name__}: {e}")
+            raise
+
+    async def delete(self, session: AsyncSession, model: BaseModel) -> bool:
         """
-        Удалить запись
+        Удаление записи из БД.
         
         Args:
             session: Асинхронная сессия БД
-            model_class: Класс модели SQLAlchemy
-            obj_id: UUID записи
+            model: Экземпляр модели для удаления
             
         Returns:
-            True если удалено успешно, False если запись не найдена
+            True если удаление успешно
         """
         try:
-            # Проверка существования записи
-            obj = await self.get_by_id(session, model_class, obj_id)
-            if not obj:
-                return False
-            
-            # Удаление записи
-            delete_query = delete(model_class).where(model_class.id == obj_id)
-            await session.execute(delete_query)
-            
-            logger.debug(f"Удалена запись {model_class.__name__} с ID: {obj_id}")
+            await session.delete(model)
+            await session.flush()
             return True
-            
         except SQLAlchemyError as e:
-            await session.rollback()
-            logger.error(f"Ошибка БД при удалении {model_class.__name__}: {e}")
-            raise DatabaseError(f"Ошибка базы данных: {str(e)}")
-    
-    async def filter(
+            logger.error(f"Error deleting {model.__class__.__name__}: {e}")
+            raise
+
+    async def bulk_create(
         self, 
         session: AsyncSession, 
         model_class: Type[T], 
-        **filters
+        items: List[Dict[str, Any]]
     ) -> List[T]:
         """
-        Фильтрация записей по условиям
+        Массовое создание записей.
         
         Args:
             session: Асинхронная сессия БД
-            model_class: Класс модели SQLAlchemy
-            **filters: Параметры фильтрации
+            model_class: Класс модели
+            items: Список словарей с данными
             
         Returns:
-            Список отфильтрованных объектов
+            Список созданных моделей
         """
         try:
-            query = select(model_class)
+            created_models = []
+            for item_data in items:
+                model = model_class(**item_data)
+                session.add(model)
+                created_models.append(model)
             
-            # Построение условий фильтрации
-            conditions = []
-            for key, value in filters.items():
-                if hasattr(model_class, key):
-                    column = getattr(model_class, key)
-                    
-                    # Обработка специальных операторов
-                    if isinstance(value, dict):
-                        for op, op_value in value.items():
-                            if op == 'eq':
-                                conditions.append(column == op_value)
-                            elif op == 'ne':
-                                conditions.append(column != op_value)
-                            elif op == 'gt':
-                                conditions.append(column > op_value)
-                            elif op == 'lt':
-                                conditions.append(column < op_value)
-                            elif op == 'gte':
-                                conditions.append(column >= op_value)
-                            elif op == 'lte':
-                                conditions.append(column <= op_value)
-                            elif op == 'like':
-                                conditions.append(column.ilike(f"%{op_value}%"))
-                            elif op == 'in':
-                                conditions.append(column.in_(op_value))
-                    else:
-                        conditions.append(column == value)
+            await session.flush()
             
-            if conditions:
-                query = query.where(and_(*conditions))
+            # Обновляем созданные модели для получения ID
+            for model in created_models:
+                await session.refresh(model)
             
-            result = await session.execute(query)
-            return list(result.scalars().all())
-            
+            return created_models
         except SQLAlchemyError as e:
-            logger.error(f"Ошибка БД при фильтрации {model_class.__name__}: {e}")
-            raise DatabaseError(f"Ошибка базы данных: {str(e)}")
-    
-    async def count(self, session: AsyncSession, model_class: Type[T], **filters) -> int:
+            logger.error(f"Error bulk creating {model_class.__name__}: {e}")
+            raise
+
+    async def execute_raw_query(
+        self, 
+        session: AsyncSession, 
+        query: str, 
+        params: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """
-        Подсчет количества записей
+        Выполнение сырого SQL запроса.
         
         Args:
             session: Асинхронная сессия БД
-            model_class: Класс модели SQLAlchemy
-            **filters: Параметры фильтрации
+            query: SQL запрос
+            params: Параметры запроса
+            
+        Returns:
+            Список словарей с результатами
+        """
+        try:
+            result = await session.execute(text(query), params or {})
+            rows = result.fetchall()
+            
+            # Преобразование в список словарей
+            return [dict(row._mapping) for row in rows]
+        except SQLAlchemyError as e:
+            logger.error(f"Error executing raw query: {e}")
+            raise
+
+    async def count(
+        self, 
+        session: AsyncSession, 
+        model_class: Type[T],
+        filters: Optional[Dict[str, Any]] = None
+    ) -> int:
+        """
+        Подсчет количества записей с фильтрами.
+        
+        Args:
+            session: Асинхронная сессия БД
+            model_class: Класс модели
+            filters: Словарь фильтров
             
         Returns:
             Количество записей
         """
         try:
-            query = select(func.count()).select_from(model_class)
+            query = select(model_class)
             
-            # Построение условий фильтрации
-            conditions = []
-            for key, value in filters.items():
-                if hasattr(model_class, key):
-                    column = getattr(model_class, key)
-                    conditions.append(column == value)
+            if filters:
+                for field, value in filters.items():
+                    if hasattr(model_class, field):
+                        query = query.where(getattr(model_class, field) == value)
             
-            if conditions:
-                query = query.where(and_(*conditions))
-            
-            result = await session.execute(query)
-            return result.scalar() or 0
-            
+            result = await session.execute(select([query.subquery()]).count())
+            return result.scalar()
         except SQLAlchemyError as e:
-            logger.error(f"Ошибка БД при подсчете {model_class.__name__}: {e}")
-            raise DatabaseError(f"Ошибка базы данных: {str(e)}")
-    
-    async def execute_raw(self, session: AsyncSession, sql: str, params: Dict = None) -> List[Dict]:
+            logger.error(f"Error counting {model_class.__name__}: {e}")
+            raise
+
+    async def exists(
+        self, 
+        session: AsyncSession, 
+        model_class: Type[T], 
+        filters: Dict[str, Any]
+    ) -> bool:
         """
-        Выполнить сырой SQL запрос
+        Проверка существования записи по фильтрам.
         
         Args:
             session: Асинхронная сессия БД
-            sql: SQL запрос
-            params: Параметры запроса
+            model_class: Класс модели
+            filters: Словарь фильтров
             
         Returns:
-            Список результатов в виде словарей
+            True если запись существует
         """
         try:
-            result = await session.execute(text(sql), params or {})
-            rows = result.fetchall()
+            query = select(model_class.id)
             
-            # Преобразование в словари
-            return [
-                {column: value for column, value in zip(result.keys(), row)}
-                for row in rows
-            ]
+            for field, value in filters.items():
+                if hasattr(model_class, field):
+                    query = query.where(getattr(model_class, field) == value)
             
+            query = query.limit(1)
+            result = await session.execute(query)
+            return result.scalar_one_or_none() is not None
         except SQLAlchemyError as e:
-            logger.error(f"Ошибка БД при выполнении сырого запроса: {e}")
-            raise DatabaseError(f"Ошибка базы данных: {str(e)}")
-    
-    def _validate_required_fields(self, model_class: Type[T], data: Dict[str, Any]):
+            logger.error(f"Error checking existence of {model_class.__name__}: {e}")
+            raise
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncGenerator[AsyncSession, None]:
         """
-        Проверка обязательных полей
+        Контекстный менеджер для транзакций.
         
-        Args:
-            model_class: Класс модели
-            data: Данные для проверки
-            
-        Raises:
-            ValidationError: Если отсутствуют обязательные поля
+        Пример использования:
+        async with db_service.transaction() as session:
+            # операции в транзакции
         """
-        required_fields = []
-        
-        # Получение информации о столбцах модели
-        for column in model_class.__table__.columns:
-            if not column.nullable and column.name != 'id':
-                required_fields.append(column.name)
-        
-        # Проверка наличия обязательных полей
-        missing_fields = []
-        for field in required_fields:
-            if field not in data or data[field] is None:
-                missing_fields.append(field)
-        
-        if missing_fields:
-            raise ValidationError(
-                f"Отсутствуют обязательные поля: {', '.join(missing_fields)}"
-            )
+        async with self.get_session() as session:
+            try:
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
 
-
-# Синглтон экземпляра сервиса
-_database_service = None
-
-def get_database_service() -> DatabaseService:
-    """Получить экземпляр DatabaseService (синглтон)"""
-    global _database_service
-    if _database_service is None:
-        _database_service = DatabaseService()
-    return _database_service
+    async def health_check(self) -> bool:
+        """
+        Проверка работоспособности БД.
+        
+        Returns:
+            True если БД доступна
+        """
+        try:
+            async with self.get_session() as session:
+                await session.execute(text("SELECT 1"))
+                return True
+        except SQLAlchemyError as e:
+            logger.error(f"Database health check failed: {e}")
+            return False
