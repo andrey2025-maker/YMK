@@ -8,6 +8,8 @@ from sqlalchemy.pool import NullPool
 from config import config
 from storage.cache.manager import CacheManager
 
+from modules.admin import AdminModule
+
 
 class AppContext:
     """Контекст приложения, управляющий всеми внешними соединениями."""
@@ -163,3 +165,13 @@ class AppContext:
         """
         # Временная заглушка - вернет None
         return None
+    
+    async def _init_admin_module(self):
+        self.admin_module = AdminModule(self)
+        await self.admin_module.initialize()
+
+        # Доступ к отдельным менеджерам
+        self.admin_manager = self.admin_module.admin_manager
+        self.permission_manager = self.admin_module.permission_manager
+        self.log_manager = self.admin_module.log_manager
+        self.export_manager = self.admin_module.export_manager

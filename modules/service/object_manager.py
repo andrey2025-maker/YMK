@@ -9,6 +9,10 @@ from modules.file.archive_manager import ArchiveManager
 from utils.date_utils import parse_date, format_date
 from core.context import AppContext
 
+problems = await self.context.service_module.data_managers.problem_manager.get_problems(object_id)
+
+# Для добавления оборудования
+result = await self.context.service_module.data_managers.equipment_manager.add_equipment(...)
 
 class ObjectManager:
     """Менеджер объектов обслуживания"""

@@ -16,6 +16,12 @@ from core.keyboards.builders.service import (
 
 router = Router(name="service_handlers")
 
+# В обработчике проблем
+result = await context.service_module.data_managers.problem_manager.add_problem(...)
+
+# В обработчике ТО
+result = await context.service_module.data_managers.maintenance_manager.add_maintenance(...)
+
 @router.message(Command("обслуживание"))
 async def service_command(message: Message, state: FSMContext):
     """Обработка команды !обслуживание"""
