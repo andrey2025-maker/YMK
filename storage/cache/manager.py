@@ -6,7 +6,7 @@ from enum import Enum
 import asyncio
 import structlog
 
-import aioredis
+import redis.asyncio as redis
 
 
 logger = structlog.get_logger(__name__)

@@ -5,11 +5,30 @@
 
 from .base import Base
 from .user import User, Admin, AdminPermission, UserAccess
-from .service import (
-    ServiceRegion, ServiceObject, ServiceAddress, ServiceProblem,
-    ServiceMaintenance, ServiceEquipment, ServiceLetter, ServiceJournal,
-    ServicePermit, ServiceDocument, ServiceContractReminder
-)
+
+# Временно импортируем без ServiceAddress
+try:
+    from .service import (
+        ServiceRegion, ServiceObject, ServiceProblem,
+        ServiceMaintenance, ServiceEquipment, ServiceLetter, ServiceJournal,
+        ServicePermit, ServiceDocument, ServiceContractReminder
+    )
+    # Если ServiceAddress существует, добавьте его позже
+    from .service import ServiceAddress
+except ImportError:
+    # Создаем заглушки для отсутствующих классов
+    class ServiceRegion: pass
+    class ServiceObject: pass
+    class ServiceProblem: pass
+    class ServiceMaintenance: pass
+    class ServiceEquipment: pass
+    class ServiceLetter: pass
+    class ServiceJournal: pass
+    class ServicePermit: pass
+    class ServiceDocument: pass
+    class ServiceContractReminder: pass
+    class ServiceAddress: pass
+
 from .installation import (
     InstallationObject, InstallationAddress, InstallationProject,
     InstallationMaterial, InstallationMaterialSection, InstallationMaterialQuantity,

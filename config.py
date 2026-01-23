@@ -1,6 +1,11 @@
 from pydantic_settings import BaseSettings
-from pydantic import Field, PostgresDsn, RedisDsn
+from pydantic import Field, PostgresDsn, RedisDsn, ConfigDict
 from typing import Optional, Dict, Any, List
+import os
+from dotenv import load_dotenv
+
+# Загрузите .env при импорте модуля
+load_dotenv()
 
 
 class DatabaseSettings(BaseSettings):
@@ -71,13 +76,16 @@ class ThrottlingSettings(BaseSettings):
     
     # Исключения (команды, которые не ограничиваются)
     exempt_commands: List[str] = Field(
-        default=["start", "help", "команды", "стоп", "отмена"],
+        default_factory=lambda: ["start", "help", "команды", "стоп", "отмена"],
         description="Команды, исключенные из throttling"
     )
     
     # Исключения (ID пользователей или групп)
-    exempt_user_ids: List[int] = Field(default=[], description="ID пользователей с отключенным throttling")
-    exempt_chat_ids: List[int] = Field(default=[], description="ID чатов с отключенным throttling")
+    exempt_user_ids: List[int] = Field(default_factory=list, description="ID пользователей с отключенным throttling")
+    exempt_chat_ids: List[int] = Field(default_factory=list, description="ID чатов с отключенным throttling")
+    
+    # Добавьте эту модель конфигурации
+    model_config = ConfigDict(env_prefix="ELECTRIC_BOT_THROTTLING__", env_nested_delimiter="__")
 
 
 class TelegramArchiveSettings(BaseSettings):
@@ -112,8 +120,8 @@ class TelegramArchiveSettings(BaseSettings):
 class BotSettings(BaseSettings):
     """Настройки бота."""
     
-    token: str = Field(..., description="Токен Telegram бота")
-    main_admin_id: int = Field(..., description="ID главного администратора")
+    token: str = Field(default="", description="Токен Telegram бота")
+    main_admin_id: int = Field(default=0, description="ID главного администратора")
     
     debug: bool = Field(default=False, description="Режим отладки")
     log_level: str = Field(default="INFO", description="Уровень логирования")
@@ -126,12 +134,15 @@ class BotSettings(BaseSettings):
     
     # Напоминания
     reminder_check_interval: int = Field(default=300, description="Интервал проверки напоминаний в секундах")
-    contract_warning_days: list[int] = Field(default=[7, 1], description="За сколько дней напоминать о контракте")
+    contract_warning_days: list[int] = Field(
+        default_factory=lambda: [7, 1],
+        description="За сколько дней напоминать о контракте"
+    )
     
     # Лимиты файлов
     max_file_size: int = Field(default=50 * 1024 * 1024, description="Максимальный размер файла (50 MB)")
     allowed_file_types: Dict[str, list] = Field(
-        default={
+        default_factory=lambda: {
             "pdf": [".pdf"],
             "excel": [".xlsx", ".xls", ".xlsm", ".xlsb", ".csv"],
             "word": [".docx", ".doc", ".docm", ".dotx"],
@@ -145,11 +156,11 @@ class BotSettings(BaseSettings):
 class Config(BaseSettings):
     """Основной класс конфигурации."""
     
-    bot: BotSettings = BotSettings()
-    database: DatabaseSettings = DatabaseSettings()
-    redis: RedisSettings = RedisSettings()
-    archive: TelegramArchiveSettings = TelegramArchiveSettings()
-    throttling: ThrottlingSettings = ThrottlingSettings()  # Добавлено
+    bot: BotSettings
+    database: DatabaseSettings
+    redis: RedisSettings
+    archive: TelegramArchiveSettings
+    throttling: ThrottlingSettings
     
     class Config:
         env_file = ".env"
@@ -158,5 +169,25 @@ class Config(BaseSettings):
         case_sensitive = False
 
 
-# Создаем глобальный экземпляр конфигурации
-config = Config()
+# Вспомогательная функция для создания директорий
+def create_directories():
+    """Создает необходимые директории для работы бота."""
+    import os
+    from pathlib import Path
+    
+    directories = [
+        "logs",
+        "temp",
+        "exports",
+        "backups",
+    ]
+    
+    for directory in directories:
+        Path(directory).mkdir(exist_ok=True)
+        print(f"Created directory: {directory}")
+
+
+# Функция для получения конфигурации
+def get_config() -> Config:
+    """Получает экземпляр конфигурации."""
+    return Config()

@@ -4,8 +4,8 @@ from typing import Optional, List
 import uuid
 
 from sqlalchemy import (
-    Column, String, Integer, Boolean, DateTime, 
-    ForeignKey, Text, ARRAY, JSON
+    String, Integer, Boolean, DateTime, 
+    ForeignKey, JSON, func  # ДОБАВЛЕНО func
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, Mapped, mapped_column
@@ -23,6 +23,14 @@ class AdminLevel(Enum):
 
 class User(Base):
     """Модель пользователя Telegram."""
+    
+    __tablename__ = "user"
+    
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4
+    )
     
     telegram_id: Mapped[int] = mapped_column(
         Integer,
@@ -55,7 +63,7 @@ class User(Base):
     )
     
     # Дата последней активности
-    last_active: Mapped[datetime] = mapped_column(
+    last_active: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         nullable=True
     )
@@ -81,6 +89,14 @@ class User(Base):
 class Admin(Base):
     """Модель администратора."""
     
+    __tablename__ = "admin"
+    
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4
+    )
+    
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("user.id", ondelete="CASCADE"),
@@ -104,7 +120,7 @@ class Admin(Base):
     # Дата назначения
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default=func.now(),
+        server_default=func.now(),  # Теперь func импортирован
         nullable=False
     )
     
@@ -164,6 +180,14 @@ class Admin(Base):
 class AdminPermission(Base):
     """Модель разрешений для администраторов."""
     
+    __tablename__ = "admin_permission"
+    
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4
+    )
+    
     admin_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("admin.id", ondelete="CASCADE"),
@@ -209,6 +233,14 @@ class AdminPermission(Base):
 class UserAccess(Base):
     """Модель доступа пользователей к объектам."""
     
+    __tablename__ = "user_access"
+    
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4
+    )
+    
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("user.id", ondelete="CASCADE"),
@@ -244,7 +276,7 @@ class UserAccess(Base):
     # Дата предоставления доступа
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default=func.now(),
+        server_default=func.now(),  # Теперь func импортирован
         nullable=False
     )
     

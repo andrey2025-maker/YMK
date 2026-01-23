@@ -6,8 +6,18 @@ from contextlib import asynccontextmanager
 
 import structlog
 from aiogram import Bot, Dispatcher
+from dotenv import load_dotenv
 
-from config import config, create_directories
+# ЗАГРУЗИТЬ .env ПЕРВЫМ ДЕЛОМ
+load_dotenv()
+
+# Импортируем функцию get_config вместо прямого импорта Config()
+from config import get_config, create_directories
+
+# СОЗДАЕМ КОНФИГ ТОЛЬКО ОДИН РАЗ
+config = get_config()
+
+# Теперь импортируем остальное
 from core.bot import create_bot
 from core.context import AppContext
 from core.loader import load_modules

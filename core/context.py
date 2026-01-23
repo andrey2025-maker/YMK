@@ -1,11 +1,12 @@
 from typing import Optional, Dict, Any
 import asyncio
 
-import aioredis
+# ИСПРАВЛЕННЫЙ ИМПОРТ - заменяем aioredis на redis.asyncio
+import redis.asyncio as redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from config import config
+from config import get_config
 from storage.cache.manager import CacheManager
 
 from modules.admin import AdminModule
@@ -25,11 +26,16 @@ class AppContext:
     def __init__(self):
         if not hasattr(self, '_initialized'):
             self._initialized = False
-            self.config = config
+            self.config = get_config()  # Используем функцию get_config
             self._engine = None
             self._session_factory = None
-            self._redis = None
+            self._redis_client = None  # Переименуем для ясности
             self._cache = None
+            self.admin_module = None
+            self.admin_manager = None
+            self.permission_manager = None
+            self.log_manager = None
+            self.export_manager = None
     
     async def initialize(self) -> None:
         """Инициализирует все соединения."""
@@ -47,6 +53,9 @@ class AppContext:
                 # Инициализируем базу данных
                 await self._init_database()
                 
+                # Инициализируем админ модуль
+                await self._init_admin_module()
+                
                 self._initialized = True
                 
             except Exception as e:
@@ -55,16 +64,25 @@ class AppContext:
     
     async def _init_redis(self) -> None:
         """Инициализирует подключение к Redis."""
-        self._redis = await aioredis.from_url(
-            self.config.redis.dsn,
+        # Используем новый async redis клиент
+        self._redis_client = redis.Redis(
+            host=self.config.redis.host,
+            port=self.config.redis.port,
+            db=self.config.redis.db,
+            password=self.config.redis.password,
             encoding="utf-8",
             decode_responses=True,
+            socket_timeout=5,
+            socket_connect_timeout=5,
             max_connections=10,
         )
+        
+        # Тестируем подключение
+        await self._redis_client.ping()
     
     async def _init_cache(self) -> None:
         """Инициализирует менеджер кэша."""
-        self._cache = CacheManager(self._redis)
+        self._cache = CacheManager(self._redis_client)
         await self._cache.initialize()
     
     async def _init_database(self) -> None:
@@ -86,11 +104,11 @@ class AppContext:
         )
     
     @property
-    def redis(self) -> aioredis.Redis:
+    def redis(self) -> redis.Redis:
         """Возвращает клиент Redis."""
-        if not self._redis:
+        if not self._redis_client:
             raise RuntimeError("Redis not initialized. Call initialize() first.")
-        return self._redis
+        return self._redis_client
     
     @property
     def cache(self) -> CacheManager:
@@ -114,9 +132,9 @@ class AppContext:
     
     async def close(self) -> None:
         """Корректно закрывает все соединения."""
-        if self._redis:
-            await self._redis.close()
-            self._redis = None
+        if self._redis_client:
+            await self._redis_client.close()
+            self._redis_client = None
         
         if self._cache:
             await self._cache.close()
@@ -126,6 +144,10 @@ class AppContext:
             await self._engine.dispose()
             self._engine = None
         
+        if self.admin_module:
+            await self.admin_module.close()
+            self.admin_module = None
+        
         self._initialized = False
     
     async def health_check(self) -> Dict[str, bool]:
@@ -134,8 +156,8 @@ class AppContext:
         
         # Проверка Redis
         try:
-            if self._redis:
-                await self._redis.ping()
+            if self._redis_client:
+                await self._redis_client.ping()
                 checks['redis'] = True
             else:
                 checks['redis'] = False
